@@ -1,112 +1,58 @@
-require('dotenv').config();
-
 const express = require('express');
+const axios = require('axios');
 const app = express();
-const { sql } = require('@vercel/postgres');
+const port = 3000;
 
-const bodyParser = require('body-parser');
-const path = require('path');
-
-// Create application/x-www-form-urlencoded parser
-const urlencodedParser = bodyParser.urlencoded({ extended: false });
-
-app.use(express.static('public'));
-
-app.get('/', function (req, res) {
-	res.sendFile(path.join(__dirname, '..', 'components', 'home.htm'));
+// 中间件配置
+app.use(express.json());
+app.use((req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  next();
 });
 
-app.get('/about', function (req, res) {
-	res.sendFile(path.join(__dirname, '..', 'components', 'about.htm'));
+// 动态 VMID 转发接口
+app.get('/api/count', async (req, res) => {
+  const vmid = req.query.vmid;
+
+  // 参数校验
+  if (!vmid || isNaN(vmid)) {
+    return res.status(400).json({
+      source: 'bilibili',
+      key: '',
+      failed: true,
+      error: '无效的 VMID 参数'
+    });
+  }
+
+  try {
+    const response = await axios.get(`https://api.bilibili.com/x/relation/stat?vmid=${vmid}`, {
+      timeout: 5000
+    });
+
+    if (response.data.code !== 0) {
+      throw new Error(`B站 API 错误: ${response.data.message}`);
+    }
+
+    const data = response.data.data;
+    res.json({
+      source: 'bilibili',
+      key: data.mid,
+      failed: false,
+      count: data.follower
+    });
+
+  } catch (error) {
+    console.error(`[${vmid}] 请求失败:`, error.message);
+    res.status(500).json({
+      source: 'bilibili',
+      key: vmid,
+      failed: true,
+      error: error.message || '数据获取失败'
+    });
+  }
 });
 
-app.get('/uploadUser', function (req, res) {
-	res.sendFile(path.join(__dirname, '..', 'components', 'user_upload_form.htm'));
+// 启动服务
+app.listen(port, () => {
+  console.log(`服务运行在 http://localhost:${port}/api/count?vmid=你的UID`);
 });
-
-app.post('/uploadSuccessful', urlencodedParser, async (req, res) => {
-	try {
-		await sql`INSERT INTO Users (Id, Name, Email) VALUES (${req.body.user_id}, ${req.body.name}, ${req.body.email});`;
-		res.status(200).send('<h1>User added successfully</h1>');
-	} catch (error) {
-		console.error(error);
-		res.status(500).send('Error adding user');
-	}
-});
-
-app.get('/allUsers', async (req, res) => {
-	try {
-		const users = await sql`SELECT * FROM Users;`;
-		if (users && users.rows.length > 0) {
-			let tableContent = users.rows
-				.map(
-					(user) =>
-						`<tr>
-                        <td>${user.id}</td>
-                        <td>${user.name}</td>
-                        <td>${user.email}</td>
-                    </tr>`
-				)
-				.join('');
-
-			res.status(200).send(`
-                <html>
-                    <head>
-                        <title>Users</title>
-                        <style>
-                            body {
-                                font-family: Arial, sans-serif;
-                            }
-                            table {
-                                width: 100%;
-                                border-collapse: collapse;
-                                margin-bottom: 15px;
-                            }
-                            th, td {
-                                border: 1px solid #ddd;
-                                padding: 8px;
-                                text-align: left;
-                            }
-                            th {
-                                background-color: #f2f2f2;
-                            }
-                            a {
-                                text-decoration: none;
-                                color: #0a16f7;
-                                margin: 15px;
-                            }
-                        </style>
-                    </head>
-                    <body>
-                        <h1>Users</h1>
-                        <table>
-                            <thead>
-                                <tr>
-                                    <th>User ID</th>
-                                    <th>Name</th>
-                                    <th>Email</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                ${tableContent}
-                            </tbody>
-                        </table>
-                        <div>
-                            <a href="/">Home</a>
-                            <a href="/uploadUser">Add User</a>
-                        </div>
-                    </body>
-                </html>
-            `);
-		} else {
-			res.status(404).send('Users not found');
-		}
-	} catch (error) {
-		console.error(error);
-		res.status(500).send('Error retrieving users');
-	}
-});
-
-app.listen(3000, () => console.log('Server ready on port 3000.'));
-
-module.exports = app;
